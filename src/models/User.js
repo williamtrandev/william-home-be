@@ -23,7 +23,11 @@ const userSchema = new mongoose.Schema({
 	pendingInvites: [{
 		type: mongoose.Schema.Types.ObjectId,
 		ref: 'House'
-	}]
+	}],
+	isNewUser: {
+		type: Boolean,
+		default: true
+	}
 }, { timestamps: true });
 
 module.exports = mongoose.model('User', userSchema); 

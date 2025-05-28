@@ -15,11 +15,6 @@ router.post('/', auth, async (req, res) => {
 			return res.status(404).json({ error: 'House not found' });
 		}
 
-		// Check if user is a member
-		if (!house.members.includes(req.user._id) && house.owner.toString() !== req.user._id.toString()) {
-			return res.status(403).json({ error: 'Not authorized to add expenses to this house' });
-		}
-
 		const expense = await Expense.create({
 			house: houseId,
 			createdBy: req.user._id,
@@ -27,11 +22,9 @@ router.post('/', auth, async (req, res) => {
 			amount
 		});
 
-		house.expenses.push(expense._id);
-		await house.save();
-
 		res.status(201).json(expense);
 	} catch (error) {
+		console.log(error);
 		res.status(500).json({ error: 'Failed to create expense' });
 	}
 });
@@ -39,22 +32,36 @@ router.post('/', auth, async (req, res) => {
 // Get house expenses
 router.get('/house/:houseId', auth, async (req, res) => {
 	try {
+		const page = parseInt(req.query.page) || 1;
+		const limit = parseInt(req.query.limit) || 10;
+		const skip = (page - 1) * limit;
+
 		const house = await House.findById(req.params.houseId);
 		if (!house) {
 			return res.status(404).json({ error: 'House not found' });
 		}
 
-		// Check if user is a member
-		if (!house.members.includes(req.user._id) && house.owner.toString() !== req.user._id.toString()) {
-			return res.status(403).json({ error: 'Not authorized to view expenses' });
-		}
+		// Get total count of expenses
+		const totalExpenses = await Expense.countDocuments({ house: req.params.houseId });
 
+		// Get paginated expenses
 		const expenses = await Expense.find({ house: req.params.houseId })
 			.populate('createdBy', 'name email picture')
-			.sort({ createdAt: -1 });
+			.sort({ createdAt: -1 })
+			.skip(skip)
+			.limit(limit);
 
-		res.json(expenses);
+		res.json({
+			expenses,
+			pagination: {
+				currentPage: page,
+				totalPages: Math.ceil(totalExpenses / limit),
+				totalItems: totalExpenses,
+				itemsPerPage: limit
+			}
+		});
 	} catch (error) {
+		console.log(error);
 		res.status(500).json({ error: 'Failed to fetch expenses' });
 	}
 });
@@ -84,33 +91,47 @@ router.put('/:id', auth, async (req, res) => {
 	}
 });
 
+// Delete expense
+router.delete('/:id', auth, async (req, res) => {
+	try {
+		const expense = await Expense.findById(req.params.id);
+		if (!expense) {
+			return res.status(404).json({ error: 'Expense not found' });
+		}
+
+
+		await expense.deleteOne();
+
+		res.json({ message: 'Expense deleted successfully' });
+	} catch (error) {
+		res.status(500).json({ error: 'Failed to delete expense' });
+	}
+});
+
 // Settle expenses
 router.post('/house/:houseId/settle', auth, async (req, res) => {
 	try {
 		const house = await House.findById(req.params.houseId)
-			.populate('members', '_id')
-			.populate({
-				path: 'expenses',
-				match: { isSettled: false },
-				populate: { path: 'createdBy', select: '_id' }
-			});
+			.populate('members.user', '_id');
 
 		if (!house) {
 			return res.status(404).json({ error: 'House not found' });
 		}
 
-		// Check if user is a member
-		if (!house.members.includes(req.user._id) && house.owner.toString() !== req.user._id.toString()) {
-			return res.status(403).json({ error: 'Not authorized to settle expenses' });
-		}
+
+		// Get all unsettled expenses for this house
+		const expenses = await Expense.find({
+			house: house._id,
+			isSettled: false
+		}).populate('createdBy', '_id');
 
 		// Calculate expenses per person
 		const expensesPerPerson = {};
 		house.members.forEach(member => {
-			expensesPerPerson[member._id] = 0;
+			expensesPerPerson[member.user._id] = 0;
 		});
 
-		house.expenses.forEach(expense => {
+		expenses.forEach(expense => {
 			expensesPerPerson[expense.createdBy._id] += expense.amount;
 		});
 
@@ -166,16 +187,94 @@ router.post('/house/:houseId/settle', auth, async (req, res) => {
 			}
 		);
 
-		// Save transactions to house
-		house.settledTransactions.push(...transactions);
-		await house.save();
-
 		res.json({
 			message: 'Expenses settled successfully',
 			transactions
 		});
 	} catch (error) {
 		res.status(500).json({ error: 'Failed to settle expenses' });
+	}
+});
+
+// Get monthly statistics
+router.get('/house/:houseId/statistics', auth, async (req, res) => {
+	try {
+		const house = await House.findById(req.params.houseId);
+		if (!house) {
+			return res.status(404).json({ error: 'House not found' });
+		}
+
+		// Get current month's start and end dates
+		const now = new Date();
+		const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+		const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+		// Get previous month's start and end dates
+		const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+		const endOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+
+		// Get all expenses for current month
+		const currentMonthExpenses = await Expense.find({
+			house: house._id,
+			createdAt: {
+				$gte: startOfMonth,
+				$lte: endOfMonth
+			}
+		});
+
+		// Get all expenses for previous month
+		const prevMonthExpenses = await Expense.find({
+			house: house._id,
+			createdAt: {
+				$gte: startOfPrevMonth,
+				$lte: endOfPrevMonth
+			}
+		});
+
+		// Calculate current month statistics
+		const totalAmount = currentMonthExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+		const totalExpenses = currentMonthExpenses.length;
+		const avgExpense = totalExpenses > 0 ? totalAmount / totalExpenses : 0;
+		const avgPerPerson = totalAmount / house.members.length;
+
+		// Calculate previous month statistics
+		const prevMonthTotal = prevMonthExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+		const prevMonthExpensesCount = prevMonthExpenses.length;
+		const prevMonthAvgExpense = prevMonthExpensesCount > 0 ? prevMonthTotal / prevMonthExpensesCount : 0;
+		const prevMonthAvgPerPerson = prevMonthTotal / house.members.length;
+
+		// Calculate growth percentages
+		const calculateGrowth = (current, previous) => {
+			if (previous === 0) {
+				return current > 0 ? '+inf' : 0;
+			}
+			if (current === 0) {
+				return '-100.00';
+			}
+			const percentage = Number(((current - previous) / previous * 100).toFixed(2));
+			return percentage > 0 ? `+${percentage}` : percentage.toString();
+		};
+
+		const growthStats = {
+			totalAmountGrowth: calculateGrowth(totalAmount, prevMonthTotal),
+			totalExpensesGrowth: calculateGrowth(totalExpenses, prevMonthExpensesCount),
+			avgExpenseGrowth: calculateGrowth(avgExpense, prevMonthAvgExpense),
+			avgPerPersonGrowth: calculateGrowth(avgPerPerson, prevMonthAvgPerPerson)
+		};
+
+		res.json({
+			month: now.getMonth() + 1,
+			year: now.getFullYear(),
+			totalAmount,
+			totalExpenses,
+			avgExpense,
+			avgPerPerson,
+			memberCount: house.members.length,
+			growthStats
+		});
+	} catch (error) {
+		console.error('Statistics error:', error);
+		res.status(500).json({ error: 'Failed to fetch statistics' });
 	}
 });
 

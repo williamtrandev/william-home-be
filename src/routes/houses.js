@@ -8,18 +8,17 @@ const router = express.Router();
 // Create a new house
 router.post('/', auth, async (req, res) => {
 	try {
-		const house = await House.create({
-			name: req.body.name,
-			owner: req.user._id,
-			members: [req.user._id]
-		});
+		const { name, description } = req.body;
 
-		await User.findByIdAndUpdate(req.user._id, {
-			$push: { houses: house._id }
-		});
+		// Create house with owner using the static method
+		const house = await House.createWithOwner(
+			{ name, description },
+			req.user._id
+		);
 
 		res.status(201).json(house);
 	} catch (error) {
+		console.log(error);
 		res.status(500).json({ error: 'Failed to create house' });
 	}
 });
@@ -28,11 +27,8 @@ router.post('/', auth, async (req, res) => {
 router.get('/my-houses', auth, async (req, res) => {
 	try {
 		const houses = await House.find({
-			$or: [
-				{ owner: req.user._id },
-				{ members: req.user._id }
-			]
-		}).populate('members', 'name email picture');
+			'members.user': req.user._id
+		}).populate('members.user', 'name email picture');
 
 		res.json(houses);
 	} catch (error) {
@@ -44,7 +40,7 @@ router.get('/my-houses', auth, async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
 	try {
 		const house = await House.findById(req.params.id)
-			.populate('members', 'name email picture')
+			.populate('members.user', 'name email picture')
 			.populate('expenses');
 
 		if (!house) {
@@ -52,7 +48,7 @@ router.get('/:id', auth, async (req, res) => {
 		}
 
 		// Check if user is a member
-		if (!house.members.includes(req.user._id) && house.owner.toString() !== req.user._id.toString()) {
+		if (!house.isMember(req.user._id)) {
 			return res.status(403).json({ error: 'Not authorized to access this house' });
 		}
 
@@ -62,31 +58,55 @@ router.get('/:id', auth, async (req, res) => {
 	}
 });
 
-// Accept house invitation
-router.post('/:id/accept', auth, async (req, res) => {
+// List house members (OWNER only)
+router.get('/:houseId/members', auth, async (req, res) => {
 	try {
-		const house = await House.findById(req.params.id);
+		const house = await House.findById(req.params.houseId)
+			.populate('members.user', 'name email picture');
+
 		if (!house) {
-			return res.status(404).json({ error: 'House not found' });
+			return res.status(404).json({
+				error: {
+					en: 'House not found',
+					vi: 'Không tìm thấy nhà'
+				}
+			});
 		}
 
-		const user = await User.findById(req.user._id);
-		if (!user.pendingInvites.includes(house._id)) {
-			return res.status(403).json({ error: 'No pending invitation for this house' });
+		// Check if user is the owner
+		const member = house.members.find(m => m.user._id.toString() === req.user._id.toString());
+		if (!member || member.role !== 'OWNER') {
+			return res.status(403).json({
+				error: {
+					en: 'Only house owner can view member list',
+					vi: 'Chỉ chủ nhà mới có thể xem danh sách thành viên'
+				}
+			});
 		}
 
-		// Add user to house members
-		house.members.push(req.user._id);
-		await house.save();
+		// Format member data
+		const members = house.members.map(member => ({
+			id: member.user._id,
+			name: member.user.name,
+			email: member.user.email,
+			picture: member.user.picture,
+			role: member.role,
+			joinedAt: member.joinedAt
+		}));
 
-		// Add house to user's houses and remove from pending invites
-		user.houses.push(house._id);
-		user.pendingInvites = user.pendingInvites.filter(id => id.toString() !== house._id.toString());
-		await user.save();
-
-		res.json({ message: 'Successfully joined house' });
+		res.json({
+			houseId: house._id,
+			houseName: house.name,
+			members
+		});
 	} catch (error) {
-		res.status(500).json({ error: 'Failed to accept invitation' });
+		console.error('List members error:', error);
+		res.status(500).json({
+			error: {
+				en: 'Failed to list house members',
+				vi: 'Không thể lấy danh sách thành viên'
+			}
+		});
 	}
 });
 
