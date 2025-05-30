@@ -1,6 +1,4 @@
 const express = require('express');
-const passport = require('passport');
-const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const House = require('../models/House');
@@ -12,50 +10,8 @@ const auth = require('../middleware/auth');
 const router = express.Router();
 const { getInviteEmailTemplate } = require('../templates/emailTemplates');
 
-// Log environment variables for debugging
-console.log('Google OAuth Config:', {
-	clientID: process.env.GOOGLE_CLIENT_ID,
-	clientSecret: process.env.GOOGLE_CLIENT_SECRET ? '***' : 'not set',
-	callbackURL: process.env.GOOGLE_CALLBACK_URL
-});
-
 // Initialize Google OAuth2 client
 const oauth2Client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-
-// Configure Google Strategy
-passport.use(new GoogleStrategy({
-	clientID: process.env.GOOGLE_CLIENT_ID,
-	clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-	callbackURL: process.env.GOOGLE_CALLBACK_URL,
-	proxy: true // Add this to handle proxy issues
-},
-	async (accessToken, refreshToken, profile, done) => {
-		try {
-			console.log('Google profile:', profile);
-
-			let user = await User.findOne({ googleId: profile.id });
-
-			if (!user) {
-				user = await User.findOne({ email: profile.emails[0].value });
-				if (user) {
-					user.googleId = profile.id;
-					await user.save();
-				} else {
-					user = await User.create({
-						googleId: profile.id,
-						email: profile.emails[0].value,
-						name: profile.displayName
-					});
-				}
-			}
-
-			return done(null, user);
-		} catch (error) {
-			console.error('Strategy error:', error);
-			return done(error, null);
-		}
-	}
-));
 
 // Configure email transporter
 const transporter = nodemailer.createTransport({
@@ -89,16 +45,16 @@ const generateTokens = (user) => {
 	return { accessToken, refreshToken };
 };
 
-// Login with Google
+// Login with Google OAuth2
 router.post('/login/google', async (req, res) => {
 	try {
-		const { accessToken, houseId } = req.body;
+		const { credential: accessToken, houseId } = req.body;
 
 		if (!accessToken) {
 			return res.status(400).json({
 				error: {
 					en: 'Google access token is required',
-					vi: 'Yêu cầu token Google'
+					vi: 'Yêu cầu access token Google'
 				}
 			});
 		}
@@ -112,14 +68,19 @@ router.post('/login/google', async (req, res) => {
 			});
 		}
 
-		// Verify the access token with Google
-		const ticket = await oauth2Client.verifyIdToken({
-			idToken: accessToken,
-			audience: process.env.GOOGLE_CLIENT_ID
+		// Get user info from Google using access token
+		const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+			headers: {
+				Authorization: `Bearer ${accessToken}`
+			}
 		});
 
-		const payload = ticket.getPayload();
-		const { sub: googleId, email, name, picture } = payload;
+		if (!userInfoResponse.ok) {
+			throw new Error('Failed to get user info from Google');
+		}
+
+		const userInfo = await userInfoResponse.json();
+		const { sub: googleId, email, name, picture } = userInfo;
 
 		// Find or create user
 		let user = await User.findOne({ googleId });
@@ -203,7 +164,7 @@ router.post('/login/google', async (req, res) => {
 		res.status(401).json({
 			error: {
 				en: 'Invalid Google access token',
-				vi: 'Token Google không hợp lệ'
+				vi: 'Access token Google không hợp lệ'
 			}
 		});
 	}

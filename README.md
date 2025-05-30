@@ -1,10 +1,10 @@
 # William Home Backend
 
-A backend service for managing house expenses and settlements with Google authentication.
+A backend service for managing house expenses and settlements with Google OAuth2 authentication.
 
 ## Features
 
--   Google OAuth authentication
+-   Google OAuth2 authentication
 -   House management with member invitations
 -   Expense tracking and management
 -   Automatic expense settlement calculation
@@ -14,7 +14,7 @@ A backend service for managing house expenses and settlements with Google authen
 
 -   Node.js (v14 or higher)
 -   MongoDB
--   Google OAuth credentials
+-   Google Cloud project with OAuth2 enabled
 -   Gmail account for sending emails
 
 ## Setup
@@ -32,22 +32,22 @@ A backend service for managing house expenses and settlements with Google authen
     PORT=3000
     MONGODB_URI=mongodb://localhost:27017/william-home
     JWT_SECRET=your_jwt_secret_key
+    JWT_REFRESH_SECRET=your_jwt_refresh_secret_key
     GOOGLE_CLIENT_ID=your_google_client_id
-    GOOGLE_CLIENT_SECRET=your_google_client_secret
-    GOOGLE_CALLBACK_URL=http://localhost:3000/auth/google/callback
     EMAIL_USER=your_email@gmail.com
     EMAIL_PASS=your_email_app_password
     FRONTEND_URL=http://localhost:3000
     ```
 
-4. Set up Google OAuth:
+4. Set up Google OAuth2:
 
     - Go to Google Cloud Console
     - Create a new project
-    - Enable Google+ API
-    - Create OAuth 2.0 credentials
-    - Add authorized redirect URIs
-    - Copy Client ID and Client Secret to .env file
+    - Enable Google OAuth2 API
+    - Configure OAuth consent screen
+    - Create OAuth 2.0 Client ID
+    - Add authorized JavaScript origins and redirect URIs
+    - Copy Client ID to .env file
 
 5. Set up Gmail for sending emails:
     - Enable 2-factor authentication
@@ -72,27 +72,30 @@ npm start
 
 ### Authentication
 
--   `GET /auth/google` - Initiate Google OAuth login
--   `GET /auth/google/callback` - Google OAuth callback
--   `POST /auth/invite` - Invite user to house
+-   `POST /api/auth/login/google` - Login with Google OAuth2
+-   `POST /api/auth/refresh-token` - Refresh JWT token
+-   `GET /api/auth/me` - Get current user info
+-   `PUT /api/auth/profile` - Update user profile
+-   `POST /api/auth/invite` - Invite user to house
+-   `POST /api/auth/join/:token` - Accept house invitation
+-   `POST /api/auth/reject/:token` - Reject house invitation
 
 ### Houses
 
--   `POST /houses` - Create new house
--   `GET /houses/my-houses` - Get user's houses
--   `GET /houses/:id` - Get house details
--   `POST /houses/:id/accept` - Accept house invitation
+-   `POST /api/houses` - Create new house
+-   `GET /api/houses/my-houses` - Get user's houses
+-   `GET /api/houses/:id` - Get house details
 
 ### Expenses
 
--   `POST /expenses` - Create new expense
--   `GET /expenses/house/:houseId` - Get house expenses
--   `PUT /expenses/:id` - Update expense
--   `POST /expenses/house/:houseId/settle` - Settle house expenses
+-   `POST /api/expenses` - Create new expense
+-   `GET /api/expenses/house/:houseId` - Get house expenses
+-   `PUT /api/expenses/:id` - Update expense
+-   `POST /api/expenses/house/:houseId/settle` - Settle house expenses
 
 ## Security
 
 -   All routes except authentication are protected with JWT
--   Google OAuth for secure authentication
+-   Google OAuth2 for secure authentication
 -   Email verification for house invitations
 -   Role-based access control for house operations

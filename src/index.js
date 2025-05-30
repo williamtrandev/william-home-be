@@ -1,6 +1,5 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const passport = require('passport');
 const cors = require('cors');
 require('dotenv').config();
 
@@ -9,7 +8,6 @@ const app = express();
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(passport.initialize());
 
 // Database connection
 mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/william-home')
