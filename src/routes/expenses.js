@@ -4,6 +4,7 @@ const House = require('../models/House');
 const Settlement = require('../models/Settlement');
 const auth = require('../middleware/auth');
 const { calculateExpenses } = require('../utils/expenseCalculator');
+const { sendNotification } = require('../utils/notificationSender');
 
 const router = express.Router();
 
@@ -11,8 +12,7 @@ const router = express.Router();
 router.post('/', auth, async (req, res) => {
 	try {
 		const { houseId, purpose, amount } = req.body;
-
-		const house = await House.findById(houseId);
+		const house = await House.findById(houseId).populate('members.user', '_id');
 		if (!house) {
 			return res.status(404).json({ error: 'House not found' });
 		}
@@ -23,6 +23,26 @@ router.post('/', auth, async (req, res) => {
 			purpose,
 			amount
 		});
+
+		// Get all member IDs except the creator
+		const memberIds = house.members
+			.map(member => member.user._id)
+			.filter(id => id.toString() !== req.user._id.toString());
+		// Send notification to all house members
+		await sendNotification(
+			memberIds,
+			'Chi tiêu mới',
+			`${req.user.name} đã thêm chi tiêu mới: ${purpose} - ${amount.toLocaleString('vi-VN')}đ`,
+			{
+				type: 'NEW_EXPENSE',
+				expenseId: expense._id.toString(),
+				houseId: houseId.toString(),
+				link: `/houses/${houseId}/expenses/${expense._id}`,
+				amount: amount.toString(),
+				purpose,
+				createdBy: req.user.name
+			}
+		);
 
 		res.status(201).json(expense);
 	} catch (error) {
@@ -71,7 +91,7 @@ router.get('/house/:houseId', auth, async (req, res) => {
 // Update expense
 router.put('/:id', auth, async (req, res) => {
 	try {
-		const expense = await Expense.findById(req.params.id);
+		const expense = await Expense.findById(req.params.id).populate('house', 'members');
 		if (!expense) {
 			return res.status(404).json({ error: 'Expense not found' });
 		}
@@ -87,8 +107,30 @@ router.put('/:id', auth, async (req, res) => {
 			{ new: true }
 		);
 
+		// Get all member IDs except the updater
+		const memberIds = expense.house.members
+			.map(member => member.user.toString())
+			.filter(id => id !== req.user._id.toString());
+
+		// Send notification to all house members
+		await sendNotification(
+			memberIds,
+			'Chi tiêu được cập nhật',
+			`${req.user.name} đã cập nhật chi tiêu: ${updatedExpense.purpose} - ${updatedExpense.amount.toLocaleString('vi-VN')}đ`,
+			{
+				type: 'UPDATED_EXPENSE',
+				expenseId: expense._id.toString(),
+				houseId: expense.house._id.toString(),
+				link: `/houses/${expense.house._id}/expenses/${expense._id}`,
+				amount: updatedExpense.amount.toString(),
+				purpose: updatedExpense.purpose,
+				updatedBy: req.user.name
+			}
+		);
+
 		res.json(updatedExpense);
 	} catch (error) {
+		console.log(error);
 		res.status(500).json({ error: 'Failed to update expense' });
 	}
 });
