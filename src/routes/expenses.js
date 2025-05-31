@@ -1,7 +1,9 @@
 const express = require('express');
 const Expense = require('../models/Expense');
 const House = require('../models/House');
+const Settlement = require('../models/Settlement');
 const auth = require('../middleware/auth');
+const { calculateExpenses } = require('../utils/expenseCalculator');
 
 const router = express.Router();
 
@@ -45,7 +47,7 @@ router.get('/house/:houseId', auth, async (req, res) => {
 		const totalExpenses = await Expense.countDocuments({ house: req.params.houseId });
 
 		// Get paginated expenses
-		const expenses = await Expense.find({ house: req.params.houseId })
+		const expenses = await Expense.find({ house: req.params.houseId, isSettled: false })
 			.populate('createdBy', 'name email picture')
 			.sort({ createdAt: -1 })
 			.skip(skip)
@@ -209,27 +211,15 @@ router.get('/house/:houseId/statistics', auth, async (req, res) => {
 		const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
 		const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-		// Get previous month's start and end dates
-		const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-		const endOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
-
 		// Get all expenses for current month
 		const currentMonthExpenses = await Expense.find({
 			house: house._id,
-			createdAt: {
-				$gte: startOfMonth,
-				$lte: endOfMonth
-			}
+			isSettled: false
 		});
 
-		// Get all expenses for previous month
-		const prevMonthExpenses = await Expense.find({
-			house: house._id,
-			createdAt: {
-				$gte: startOfPrevMonth,
-				$lte: endOfPrevMonth
-			}
-		});
+		// Get latest settlement for comparison
+		const latestSettlement = await Settlement.findOne({ house: house._id })
+			.sort({ createdAt: -1 });
 
 		// Calculate current month statistics
 		const totalAmount = currentMonthExpenses.reduce((sum, expense) => sum + expense.amount, 0);
@@ -237,16 +227,10 @@ router.get('/house/:houseId/statistics', auth, async (req, res) => {
 		const avgExpense = totalExpenses > 0 ? totalAmount / totalExpenses : 0;
 		const avgPerPerson = totalAmount / house.members.length;
 
-		// Calculate previous month statistics
-		const prevMonthTotal = prevMonthExpenses.reduce((sum, expense) => sum + expense.amount, 0);
-		const prevMonthExpensesCount = prevMonthExpenses.length;
-		const prevMonthAvgExpense = prevMonthExpensesCount > 0 ? prevMonthTotal / prevMonthExpensesCount : 0;
-		const prevMonthAvgPerPerson = prevMonthTotal / house.members.length;
-
-		// Calculate growth percentages
+		// Calculate growth percentages compared to latest settlement
 		const calculateGrowth = (current, previous) => {
 			if (previous === 0) {
-				return current > 0 ? '+inf' : 0;
+				return current > 0 ? '+inf' : '0';
 			}
 			if (current === 0) {
 				return '-100.00';
@@ -256,10 +240,10 @@ router.get('/house/:houseId/statistics', auth, async (req, res) => {
 		};
 
 		const growthStats = {
-			totalAmountGrowth: calculateGrowth(totalAmount, prevMonthTotal),
-			totalExpensesGrowth: calculateGrowth(totalExpenses, prevMonthExpensesCount),
-			avgExpenseGrowth: calculateGrowth(avgExpense, prevMonthAvgExpense),
-			avgPerPersonGrowth: calculateGrowth(avgPerPerson, prevMonthAvgPerPerson)
+			totalAmountGrowth: calculateGrowth(totalAmount, latestSettlement?.totalAmount || 0),
+			totalExpensesGrowth: calculateGrowth(totalExpenses, latestSettlement?.totalExpenses || 0),
+			avgExpenseGrowth: calculateGrowth(avgExpense, latestSettlement?.avgExpense || 0),
+			avgPerPersonGrowth: calculateGrowth(avgPerPerson, latestSettlement?.avgPerPerson || 0)
 		};
 
 		res.json({
@@ -275,6 +259,195 @@ router.get('/house/:houseId/statistics', auth, async (req, res) => {
 	} catch (error) {
 		console.error('Statistics error:', error);
 		res.status(500).json({ error: 'Failed to fetch statistics' });
+	}
+});
+
+// Calculate expenses for a house
+router.post('/calculate/:houseId', auth, async (req, res) => {
+	try {
+		const { houseId } = req.params;
+
+		// Get house and check if user is a member
+		const house = await House.findById(houseId)
+			.populate('members.user', 'name email picture');
+
+		if (!house) {
+			return res.status(404).json({
+				error: {
+					en: 'House not found',
+					vi: 'Không tìm thấy nhà'
+				}
+			});
+		}
+
+		const member = house.members.find(m => m.user._id.toString() === req.user._id.toString());
+		if (!member) {
+			return res.status(403).json({
+				error: {
+					en: 'You do not have permission to access this house',
+					vi: 'Bạn không có quyền truy cập vào nhà này'
+				}
+			});
+		}
+
+		// Get all unsettled expenses
+		const expenses = await Expense.find({
+			house: houseId,
+			isSettled: false
+		}).populate({
+			path: 'createdBy',
+			select: 'name email picture _id'
+		});
+
+		if (expenses.length === 0) {
+			return res.status(404).json({
+				error: {
+					en: 'No unsettled expenses found',
+					vi: 'Không tìm thấy chi tiêu chưa thanh toán'
+				}
+			});
+		}
+
+		// Calculate expenses
+		const result = calculateExpenses(expenses, house.members);
+
+		// Calculate statistics
+		const totalAmount = result.totalExpenses;
+		const totalExpenses = expenses.length;
+		const avgExpense = totalAmount / totalExpenses;
+		const avgPerPerson = totalAmount / house.members.length;
+
+		// Format response
+		const formattedResult = {
+			totalAmount,
+			totalExpenses,
+			avgExpense,
+			avgPerPerson,
+			amountPerPerson: Object.entries(result.amountPerPerson).map(([userId, amount]) => {
+				const member = house.members.find(m => m.user._id.toString() === userId);
+				if (!member) return null;
+				return {
+					user: member.user,
+					amount
+				};
+			}).filter(Boolean),
+			transactions: result.transactions.map(t => {
+				const fromMember = house.members.find(m => m.user._id.toString() === t.from);
+				const toMember = house.members.find(m => m.user._id.toString() === t.to);
+				if (!fromMember || !toMember) return null;
+				return {
+					from: fromMember.user,
+					to: toMember.user,
+					amount: t.amount
+				};
+			}).filter(Boolean)
+		};
+
+		const now = new Date();
+
+		// Save settlement
+		const settlement = await Settlement.create({
+			house: houseId,
+			totalAmount,
+			totalExpenses,
+			avgExpense,
+			avgPerPerson,
+			amountPerPerson: formattedResult.amountPerPerson.map(item => ({
+				user: item.user._id,
+				amount: item.amount
+			})),
+			transactions: formattedResult.transactions.map(t => ({
+				from: t.from._id,
+				to: t.to._id,
+				amount: t.amount
+			})),
+			createdBy: req.user._id
+		});
+
+		// Mark all expenses as settled
+		await Expense.updateMany(
+			{ _id: { $in: expenses.map(e => e._id) } },
+			{
+				$set: {
+					isSettled: true,
+					settledAt: now
+				}
+			}
+		);
+
+		res.json({
+			...formattedResult,
+			settlementId: settlement._id
+		});
+	} catch (error) {
+		console.error('Error calculating expenses:', error);
+		res.status(500).json({
+			error: {
+				en: 'Failed to calculate expenses',
+				vi: 'Tính toán chi tiêu thất bại'
+			}
+		});
+	}
+});
+
+// Get settlement history
+router.get('/settlements/:houseId', auth, async (req, res) => {
+	try {
+		const { houseId } = req.params;
+		const page = parseInt(req.query.page) || 1;
+		const limit = parseInt(req.query.limit) || 10;
+		const skip = (page - 1) * limit;
+
+		// Check if user is a member of the house
+		const house = await House.findById(houseId);
+		if (!house) {
+			return res.status(404).json({
+				error: {
+					en: 'House not found',
+					vi: 'Không tìm thấy nhà'
+				}
+			});
+		}
+
+		const member = house.members.find(m => m.user._id.toString() === req.user._id.toString());
+		if (!member) {
+			return res.status(403).json({
+				error: {
+					en: 'You do not have permission to access this house',
+					vi: 'Bạn không có quyền truy cập vào nhà này'
+				}
+			});
+		}
+
+		// Get total count of settlements
+		const totalSettlements = await Settlement.countDocuments({ house: houseId });
+
+		// Get paginated settlements
+		const settlements = await Settlement.find({ house: houseId })
+			.populate('amountPerPerson.user', 'name email picture')
+			.populate('transactions.from', 'name email picture')
+			.populate('transactions.to', 'name email picture')
+			.sort({ createdAt: -1 })
+			.skip(skip)
+			.limit(limit);
+
+		res.json({
+			settlements,
+			pagination: {
+				currentPage: page,
+				totalPages: Math.ceil(totalSettlements / limit),
+				totalItems: totalSettlements,
+				itemsPerPage: limit
+			}
+		});
+	} catch (error) {
+		console.error('Error fetching settlements:', error);
+		res.status(500).json({
+			error: {
+				en: 'Failed to fetch settlements',
+				vi: 'Lấy lịch sử thanh toán thất bại'
+			}
+		});
 	}
 });
 

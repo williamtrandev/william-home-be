@@ -18,6 +18,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/william-h
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/houses', require('./routes/houses'));
 app.use('/api/expenses', require('./routes/expenses'));
+app.use('/api/settlements', require('./routes/settlements'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
