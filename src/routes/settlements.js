@@ -1,5 +1,6 @@
 const express = require('express');
 const Settlement = require('../models/Settlement');
+const Expense = require('../models/Expense');
 const auth = require('../middleware/auth');
 
 const router = express.Router();
@@ -49,7 +50,29 @@ router.get('/:id', auth, async (req, res) => {
 			return res.status(404).json({ error: 'Settlement not found' });
 		}
 
-		res.json(settlement);
+		// Get expenses that were settled in this settlement
+		// We find expenses that were settled around the same time as the settlement was created
+		const settlementTime = settlement.createdAt;
+		const timeWindow = 5 * 1000; // 5 seconds window
+		
+		const expenses = await Expense.find({
+			house: settlement.house,
+			isSettled: true,
+			settledAt: {
+				$gte: new Date(settlementTime.getTime() - timeWindow),
+				$lte: new Date(settlementTime.getTime() + timeWindow)
+			}
+		})
+		.populate('createdBy', 'name email picture')
+		.sort({ settledAt: -1 });
+
+		// Add expenses to the response
+		const settlementWithExpenses = {
+			...settlement.toObject(),
+			expenses: expenses
+		};
+
+		res.json(settlementWithExpenses);
 	} catch (error) {
 		console.log(error);
 		res.status(500).json({ error: 'Failed to fetch settlement details' });

@@ -64,7 +64,7 @@ router.get('/house/:houseId', auth, async (req, res) => {
 		}
 
 		// Get total count of expenses
-		const totalExpenses = await Expense.countDocuments({ house: req.params.houseId });
+		const totalExpenses = await Expense.countDocuments({ house: req.params.houseId, isSettled: false });
 
 		// Get paginated expenses
 		const expenses = await Expense.find({ house: req.params.houseId, isSettled: false })
