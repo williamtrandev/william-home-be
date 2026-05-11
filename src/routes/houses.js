@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const House = require('../models/House');
 const User = require('../models/User');
 const auth = require('../middleware/auth');
@@ -110,4 +111,108 @@ router.get('/:houseId/members', auth, async (req, res) => {
 	}
 });
 
-module.exports = router; 
+// Remove a member from a house (OWNER only)
+//
+// Rules:
+//  - Requester must be authenticated AND an OWNER of the target house.
+//  - Cannot remove themselves (a separate "leave house" flow should exist
+//    for that — silently allowing self-removal here would let an OWNER
+//    accidentally orphan a house).
+//  - Cannot remove another OWNER (preserves co-ownership integrity).
+//  - Target user must currently be a member.
+router.delete('/:houseId/members/:userId', auth, async (req, res) => {
+	try {
+		const { houseId, userId: targetUserId } = req.params;
+
+		if (
+			!mongoose.Types.ObjectId.isValid(houseId) ||
+			!mongoose.Types.ObjectId.isValid(targetUserId)
+		) {
+			return res.status(400).json({
+				error: {
+					en: 'Invalid house or user id',
+					vi: 'ID nhà hoặc người dùng không hợp lệ',
+				},
+			});
+		}
+
+		const house = await House.findById(houseId);
+		if (!house) {
+			return res.status(404).json({
+				error: {
+					en: 'House not found',
+					vi: 'Không tìm thấy nhà',
+				},
+			});
+		}
+
+		const requesterMember = house.members.find(
+			(m) => m.user.toString() === req.user._id.toString()
+		);
+		if (!requesterMember || requesterMember.role !== 'OWNER') {
+			return res.status(403).json({
+				error: {
+					en: 'Only the house owner can remove members',
+					vi: 'Chỉ chủ nhà mới có thể xóa thành viên',
+				},
+			});
+		}
+
+		if (targetUserId === req.user._id.toString()) {
+			return res.status(400).json({
+				error: {
+					en: 'You cannot remove yourself from the house',
+					vi: 'Bạn không thể xóa chính mình khỏi nhà',
+				},
+			});
+		}
+
+		const targetMember = house.members.find(
+			(m) => m.user.toString() === targetUserId
+		);
+		if (!targetMember) {
+			return res.status(404).json({
+				error: {
+					en: 'Member not found in this house',
+					vi: 'Không tìm thấy thành viên trong nhà này',
+				},
+			});
+		}
+
+		if (targetMember.role === 'OWNER') {
+			return res.status(403).json({
+				error: {
+					en: 'You cannot remove another owner',
+					vi: 'Không thể xóa một chủ nhà khác',
+				},
+			});
+		}
+
+		// Drop from House.members and keep User.houses in sync so the
+		// auth-middleware membership gate fires correctly on the target user's
+		// next request.
+		await house.removeMember(targetUserId);
+		await User.updateOne(
+			{ _id: targetUserId },
+			{ $pull: { houses: house._id } }
+		);
+
+		res.json({
+			message: {
+				en: 'Member removed successfully',
+				vi: 'Đã xóa thành viên thành công',
+			},
+			removedUserId: targetUserId,
+		});
+	} catch (error) {
+		console.error('Remove member error:', error);
+		res.status(500).json({
+			error: {
+				en: 'Failed to remove member',
+				vi: 'Không thể xóa thành viên',
+			},
+		});
+	}
+});
+
+module.exports = router;

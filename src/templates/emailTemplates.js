@@ -1,141 +1,239 @@
-const getInviteEmailTemplate = (houseName, inviteLink) => `
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>William's Home Invitation</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            line-height: 1.6;
-            margin: 0;
-            padding: 0;
-            background-color: #f4f4f4;
-        }
-        .container {
-            max-width: 600px;
-            margin: 20px auto;
-            background: #ffffff;
-            border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        .header {
-            background: #4a90e2;
-            color: white;
-            padding: 20px;
-            text-align: center;
-        }
-        .content {
-            padding: 30px;
-            color: #333;
-        }
-        .button {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 12px 24px;
-            background: linear-gradient(to right, #2563eb, #9333ea);
-            color: white !important;
-            text-decoration: none;
-            border-radius: 12px;
-            margin: 20px 0;
-            font-weight: 500;
-            transition: all 0.2s ease;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-        .button:hover {
-            transform: scale(1.02);
-            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
-        }
-        .button svg {
-            width: 20px;
-            height: 20px;
-            pointer-events: none;
-        }
-        .footer {
-            background: #f8f9fa;
-            padding: 20px;
-            text-align: center;
-            color: #666;
-            font-size: 12px;
-        }
-        .logo {
-            font-size: 24px;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        .language {
-            margin-bottom: 20px;
-            padding-bottom: 20px;
-            border-bottom: 1px solid #eee;
-        }
-        .language:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
-            padding-bottom: 0;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="logo">William's Home</div>
-            <h2>You've Been Invited! / Bạn Đã Được Mời!</h2>
-        </div>
-        <div class="content">
-            <!-- English Version -->
-            <div class="language">
-                <h3>Join ${houseName}</h3>
-                <p>You've been invited to join a house. This is your opportunity to collaborate and manage expenses with your housemates.</p>
-                <p>Click the button below to accept the invitation and get started:</p>
-                <div style="text-align: center;">
-                    <a href="${inviteLink}" class="button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
-                            <circle cx="9" cy="7" r="4"></circle>
-                            <line x1="19" x2="19" y1="8" y2="14"></line>
-                            <line x1="22" x2="16" y1="11" y2="11"></line>
-                        </svg>
-                        Join House
-                    </a>
-                </div>
-                <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
-                <p style="word-break: break-all; color: #666;">${inviteLink}</p>
-            </div>
+/**
+ * Invitation email — bilingual (English + Vietnamese), deliverability-tuned.
+ *
+ * Notes on each design choice:
+ *  - We always emit BOTH languages in the body. The inviter's selected UI
+ *    language (`primaryLanguage`) goes FIRST so the most likely-relevant
+ *    text is what the recipient sees on open.
+ *  - Plain text alternative is always returned so the caller can send
+ *    multipart/alternative. HTML-only mail is a major spam signal.
+ *  - All styles are inlined (most clients strip <style> blocks).
+ *  - Bulletproof <table>-based button (works in Outlook, no gradients,
+ *    transitions or SVGs — those get stripped and increase spam score).
+ *  - Hidden preheader is bilingual too, kept short to fit inbox previews.
+ *  - Subject contains both languages but uses a clean ` · ` separator
+ *    instead of `|` (pipes correlate with spam patterns).
+ */
 
-            <!-- Vietnamese Version -->
-            <div class="language">
-                <h3>Tham Gia ${houseName}</h3>
-                <p>Bạn đã được mời tham gia vào nhà. Đây là cơ hội để bạn cộng tác và quản lý chi tiêu với các thành viên trong nhà.</p>
-                <p>Nhấp vào nút bên dưới để chấp nhận lời mời và bắt đầu:</p>
-                <div style="text-align: center;">
-                    <a href="${inviteLink}" class="button">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path>
-                            <circle cx="9" cy="7" r="4"></circle>
-                            <line x1="19" x2="19" y1="8" y2="14"></line>
-                            <line x1="22" x2="16" y1="11" y2="11"></line>
-                        </svg>
-                        Tham Gia Nhà
-                    </a>
-                </div>
-                <p>Nếu nút không hoạt động, bạn có thể sao chép và dán liên kết này vào trình duyệt:</p>
-                <p style="word-break: break-all; color: #666;">${inviteLink}</p>
-            </div>
-        </div>
-        <div class="footer">
-            <p>This invitation was sent from William's Home</p>
-            <p>If you didn't expect this invitation, you can safely ignore this email.</p>
-            <hr style="margin: 20px 0; border: none; border-top: 1px solid #eee;">
-            <p>Lời mời này được gửi từ William's Home</p>
-            <p>Nếu bạn không mong đợi lời mời này, bạn có thể bỏ qua email này một cách an toàn.</p>
-        </div>
-    </div>
+const COPY = {
+    en: {
+        preheader: (inviter, house) =>
+            `${inviter} invited you to join ${house} on William's Home.`,
+        subject: (inviter, house) =>
+            `${inviter} invited you to join ${house}`,
+        languageTag: 'English',
+        greeting: 'Hi there,',
+        intro: (inviter, house) =>
+            `${inviter} has invited you to join the household "${house}" on William's Home, a simple tool for families to track shared expenses.`,
+        cta: 'Accept invitation',
+        fallbackLabel:
+            "If the button above doesn't work, paste this link into your browser:",
+        footerNote:
+            "You're receiving this because someone entered your email when inviting a member. If this wasn't expected, you can safely ignore it.",
+        signOff: 'Thanks,\nThe William\'s Home team',
+    },
+    vi: {
+        preheader: (inviter, house) =>
+            `${inviter} đã mời bạn tham gia ${house} trên William's Home.`,
+        subject: (inviter, house) =>
+            `${inviter} đã mời bạn tham gia ${house}`,
+        languageTag: 'Tiếng Việt',
+        greeting: 'Xin chào,',
+        intro: (inviter, house) =>
+            `${inviter} đã mời bạn tham gia nhà "${house}" trên William's Home, một công cụ đơn giản giúp các gia đình theo dõi chi tiêu chung.`,
+        cta: 'Chấp nhận lời mời',
+        fallbackLabel:
+            'Nếu nút bên trên không hoạt động, hãy dán liên kết này vào trình duyệt:',
+        footerNote:
+            'Bạn nhận được email này vì có người đã nhập địa chỉ của bạn khi mời thành viên. Nếu không mong đợi, bạn có thể bỏ qua email này.',
+        signOff: 'Trân trọng,\nĐội ngũ William\'s Home',
+    },
+};
+
+const escapeHtml = (s = '') =>
+    String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+/** Renders one language block (header tag + greeting + intro + CTA + fallback link). */
+const renderHtmlBlock = ({ copy, inviter, house, link, isFirst }) => `
+        <tr>
+          <td style="padding:${isFirst ? '8' : '24'}px 32px 0 32px;">
+            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#9ca3af;margin-bottom:12px;">${copy.languageTag}</div>
+            <p style="margin:0 0 12px 0;font-size:16px;line-height:1.6;color:#1f2937;">${copy.greeting}</p>
+            <p style="margin:0 0 20px 0;font-size:16px;line-height:1.6;color:#1f2937;">${copy.intro(inviter, house)}</p>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding:4px 32px 8px 32px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td bgcolor="#2563eb" style="border-radius:8px;">
+                  <a href="${link}"
+                     style="display:inline-block;padding:12px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+                    ${copy.cta}
+                  </a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 32px 8px 32px;">
+            <p style="margin:0 0 6px 0;font-size:13px;line-height:1.5;color:#6b7280;">${copy.fallbackLabel}</p>
+            <p style="margin:0;font-size:13px;line-height:1.5;word-break:break-all;"><a href="${link}" style="color:#2563eb;text-decoration:underline;">${link}</a></p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:16px 32px 0 32px;">
+            <p style="margin:0;font-size:14px;line-height:1.6;color:#1f2937;white-space:pre-line;">${copy.signOff}</p>
+          </td>
+        </tr>`;
+
+const buildHtml = ({ inviterName, houseName, inviteLink, order }) => {
+    const inviter = escapeHtml(inviterName);
+    const house = escapeHtml(houseName);
+    const link = escapeHtml(inviteLink);
+
+    const [firstCopy, secondCopy] = order;
+    const blocks = `${renderHtmlBlock({
+        copy: firstCopy,
+        inviter,
+        house,
+        link,
+        isFirst: true,
+    })}
+        <tr>
+          <td style="padding:24px 32px 8px 32px;">
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:0;">
+          </td>
+        </tr>${renderHtmlBlock({
+        copy: secondCopy,
+        inviter,
+        house,
+        link,
+        isFirst: false,
+    })}`;
+
+    const preheader = `${firstCopy.preheader(inviter, house)} · ${secondCopy.preheader(inviter, house)}`;
+
+    return `<!DOCTYPE html>
+<html lang="${firstCopy === COPY.vi ? 'vi' : 'en'}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>William's Home</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f6f8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+<!-- Preheader: hidden snippet shown in inbox preview -->
+<div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f4f6f8;opacity:0;">
+${preheader}
+</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f6f8;">
+  <tr>
+    <td align="center" style="padding:32px 16px;">
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;background-color:#ffffff;border-radius:12px;border:1px solid #e5e7eb;">
+        <tr>
+          <td style="padding:32px 32px 8px 32px;">
+            <div style="font-size:18px;font-weight:700;color:#2563eb;letter-spacing:-0.01em;">William's Home</div>
+          </td>
+        </tr>${blocks}
+        <tr>
+          <td style="padding:32px;"></td>
+        </tr>
+      </table>
+
+      <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;width:100%;">
+        <tr>
+          <td style="padding:16px 32px 24px 32px;">
+            <p style="margin:0 0 8px 0;font-size:12px;line-height:1.5;color:#9ca3af;text-align:center;">${firstCopy.footerNote}</p>
+            <p style="margin:0;font-size:12px;line-height:1.5;color:#9ca3af;text-align:center;">${secondCopy.footerNote}</p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
 </body>
-</html>
-`;
+</html>`;
+};
+
+const renderTextBlock = ({ copy, inviterName, houseName, inviteLink }) =>
+    [
+        `[${copy.languageTag}]`,
+        '',
+        copy.greeting,
+        '',
+        copy.intro(inviterName, houseName),
+        '',
+        `${copy.cta}: ${inviteLink}`,
+        '',
+        copy.signOff,
+    ].join('\n');
+
+const buildText = ({ inviterName, houseName, inviteLink, order }) => {
+    const [first, second] = order;
+    return [
+        renderTextBlock({ copy: first, inviterName, houseName, inviteLink }),
+        '',
+        '------------------------------',
+        '',
+        renderTextBlock({ copy: second, inviterName, houseName, inviteLink }),
+        '',
+        '------------------------------',
+        '',
+        first.footerNote,
+        '',
+        second.footerNote,
+    ].join('\n');
+};
+
+/**
+ * @param {object} params
+ * @param {string} params.houseName        Name of the house being invited to.
+ * @param {string} params.inviterName      Display name of the person sending the invite.
+ * @param {string} params.inviteLink       Absolute join URL.
+ * @param {'en'|'vi'} [params.primaryLanguage]
+ *        The inviter's UI language. Determines which language block appears
+ *        first in the body and which subject form is used. Defaults to 'en'.
+ * @returns {{ subject: string, html: string, text: string }}
+ */
+const getInviteEmailTemplate = ({
+    houseName,
+    inviterName,
+    inviteLink,
+    primaryLanguage = 'en',
+}) => {
+    const safeInviter = inviterName || 'Someone';
+    const safeHouse = houseName || 'a household';
+
+    const primary = COPY[primaryLanguage] || COPY.en;
+    const secondary = primary === COPY.vi ? COPY.en : COPY.vi;
+    const order = [primary, secondary];
+
+    // Bilingual subject, primary first. ` · ` separator scores better than `|`.
+    const subject = `${primary.subject(safeInviter, safeHouse)} · ${secondary.subject(safeInviter, safeHouse)}`;
+
+    return {
+        subject,
+        html: buildHtml({
+            inviterName: safeInviter,
+            houseName: safeHouse,
+            inviteLink,
+            order,
+        }),
+        text: buildText({
+            inviterName: safeInviter,
+            houseName: safeHouse,
+            inviteLink,
+            order,
+        }),
+    };
+};
 
 module.exports = {
     getInviteEmailTemplate,

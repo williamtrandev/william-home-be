@@ -1,5 +1,7 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const Expense = require('../models/Expense');
+const { EXPENSE_CATEGORIES } = require('../models/Expense');
 const House = require('../models/House');
 const Settlement = require('../models/Settlement');
 const auth = require('../middleware/auth');
@@ -8,20 +10,26 @@ const { sendNotification } = require('../utils/notificationSender');
 
 const router = express.Router();
 
+const isValidCategory = (c) => EXPENSE_CATEGORIES.includes(c);
+
 // Create new expense
 router.post('/', auth, async (req, res) => {
 	try {
-		const { houseId, purpose, amount } = req.body;
+		const { houseId, purpose, amount, category } = req.body;
 		const house = await House.findById(houseId).populate('members.user', '_id');
 		if (!house) {
 			return res.status(404).json({ error: 'House not found' });
 		}
 
+		// Validate category (optional field; fall back to OTHER).
+		const safeCategory = category && isValidCategory(category) ? category : 'OTHER';
+
 		const expense = await Expense.create({
 			house: houseId,
 			createdBy: req.user._id,
 			purpose,
-			amount
+			amount,
+			category: safeCategory,
 		});
 
 		// Get all member IDs except the creator
@@ -101,9 +109,21 @@ router.put('/:id', auth, async (req, res) => {
 			return res.status(403).json({ error: 'Not authorized to update this expense' });
 		}
 
+		// Whitelist updatable fields so clients can't poke at house/createdBy/etc.
+		// via PUT, and so that category is enum-validated.
+		const updates = {};
+		if (req.body.purpose !== undefined) updates.purpose = req.body.purpose;
+		if (req.body.amount !== undefined) updates.amount = req.body.amount;
+		if (req.body.category !== undefined) {
+			if (!isValidCategory(req.body.category)) {
+				return res.status(400).json({ error: 'Invalid category' });
+			}
+			updates.category = req.body.category;
+		}
+
 		const updatedExpense = await Expense.findByIdAndUpdate(
 			req.params.id,
-			{ $set: req.body },
+			{ $set: updates },
 			{ new: true }
 		);
 
@@ -288,6 +308,25 @@ router.get('/house/:houseId/statistics', auth, async (req, res) => {
 			avgPerPersonGrowth: calculateGrowth(avgPerPerson, latestSettlement?.avgPerPerson || 0)
 		};
 
+		// Household-wide category breakdown for the current unsettled set.
+		// Drives the "Spending by category" donut on the Dashboard.
+		const categoryAgg = await Expense.aggregate([
+			{ $match: { house: house._id, isSettled: false } },
+			{
+				$group: {
+					_id: '$category',
+					total: { $sum: '$amount' },
+					count: { $sum: 1 },
+				},
+			},
+		]);
+		const byCategory = categoryAgg.map((row) => ({
+			category: row._id || 'OTHER',
+			total: row.total,
+			count: row.count,
+			percentage: totalAmount > 0 ? Number(((row.total / totalAmount) * 100).toFixed(1)) : 0,
+		}));
+
 		res.json({
 			month: now.getMonth() + 1,
 			year: now.getFullYear(),
@@ -296,7 +335,8 @@ router.get('/house/:houseId/statistics', auth, async (req, res) => {
 			avgExpense,
 			avgPerPerson,
 			memberCount: house.members.length,
-			growthStats
+			growthStats,
+			byCategory,
 		});
 	} catch (error) {
 		console.error('Statistics error:', error);
@@ -493,4 +533,134 @@ router.get('/settlements/:houseId', auth, async (req, res) => {
 	}
 });
 
-module.exports = router; 
+// Personal analytics for the current user — powers the "My Activity" page.
+//
+//   GET /api/expenses/analytics/me?houseId=&period=
+//
+// period: 'currentMonth' (default) | 'lastMonth' | 'allTime'
+//
+// Returns one consolidated payload (single round trip) computed via Mongo
+// aggregation. We include both settled and unsettled expenses for time-bound
+// periods because the user's contribution history should reflect everything
+// they've spent, not just the current unsettled batch.
+router.get('/analytics/me', auth, async (req, res) => {
+	try {
+		const { houseId, period = 'currentMonth' } = req.query;
+
+		if (!houseId || !mongoose.Types.ObjectId.isValid(houseId)) {
+			return res.status(400).json({ error: 'Invalid houseId' });
+		}
+
+		const house = await House.findById(houseId);
+		if (!house) {
+			return res.status(404).json({ error: 'House not found' });
+		}
+
+		const isMember = house.members.some(
+			(m) => m.user.toString() === req.user._id.toString()
+		);
+		if (!isMember) {
+			return res.status(403).json({ error: 'Not a member of this house' });
+		}
+
+		// Resolve the time window. allTime returns no createdAt filter at all.
+		const now = new Date();
+		let dateFilter = null;
+		if (period === 'currentMonth') {
+			dateFilter = {
+				$gte: new Date(now.getFullYear(), now.getMonth(), 1),
+				$lt: new Date(now.getFullYear(), now.getMonth() + 1, 1),
+			};
+		} else if (period === 'lastMonth') {
+			dateFilter = {
+				$gte: new Date(now.getFullYear(), now.getMonth() - 1, 1),
+				$lt: new Date(now.getFullYear(), now.getMonth(), 1),
+			};
+		}
+
+		const houseObjectId = new mongoose.Types.ObjectId(houseId);
+		const userObjectId = new mongoose.Types.ObjectId(req.user._id);
+		const baseMatch = { house: houseObjectId };
+		if (dateFilter) baseMatch.createdAt = dateFilter;
+
+		// Run three aggregations in parallel: my totals, house totals,
+		// my category breakdown.
+		const [myAgg, houseAgg, myByCategoryAgg, recent] = await Promise.all([
+			Expense.aggregate([
+				{ $match: { ...baseMatch, createdBy: userObjectId } },
+				{
+					$group: {
+						_id: null,
+						total: { $sum: '$amount' },
+						count: { $sum: 1 },
+					},
+				},
+			]),
+			Expense.aggregate([
+				{ $match: baseMatch },
+				{
+					$group: {
+						_id: null,
+						total: { $sum: '$amount' },
+						count: { $sum: 1 },
+					},
+				},
+			]),
+			Expense.aggregate([
+				{ $match: { ...baseMatch, createdBy: userObjectId } },
+				{
+					$group: {
+						_id: '$category',
+						total: { $sum: '$amount' },
+						count: { $sum: 1 },
+					},
+				},
+				{ $sort: { total: -1 } },
+			]),
+			Expense.find({ ...baseMatch, createdBy: userObjectId })
+				.sort({ createdAt: -1 })
+				.limit(5)
+				.lean(),
+		]);
+
+		const totalSpent = myAgg[0]?.total || 0;
+		const myCount = myAgg[0]?.count || 0;
+		const houseTotal = houseAgg[0]?.total || 0;
+		const houseCount = houseAgg[0]?.count || 0;
+		const memberCount = house.members.length || 1;
+		const share = houseTotal / memberCount;
+		const balance = totalSpent - share;
+
+		const byCategory = myByCategoryAgg.map((row) => ({
+			category: row._id || 'OTHER',
+			total: row.total,
+			count: row.count,
+			percentage: totalSpent > 0 ? Number(((row.total / totalSpent) * 100).toFixed(1)) : 0,
+		}));
+
+		res.json({
+			period,
+			totalSpent,
+			myCount,
+			houseTotal,
+			houseCount,
+			memberCount,
+			share,
+			balance,
+			byCategory,
+			recent: recent.map((e) => ({
+				_id: e._id,
+				purpose: e.purpose,
+				amount: e.amount,
+				category: e.category || 'OTHER',
+				createdAt: e.createdAt,
+				isSettled: e.isSettled,
+			})),
+		});
+	} catch (error) {
+		console.error('Personal analytics error:', error);
+		res.status(500).json({ error: 'Failed to fetch personal analytics' });
+	}
+});
+
+module.exports = router;

@@ -188,6 +188,22 @@ router.post('/refresh-token', async (req, res) => {
 			return res.status(404).json({ error: 'User not found' });
 		}
 
+		// Defence in depth: if the user no longer has a house membership,
+		// don't hand out new tokens. The auth middleware enforces the same
+		// rule on every protected request, but blocking refresh as well
+		// prevents the FE interceptor from looping (refresh succeeds → call
+		// fails → refresh → ...).
+		const stillMember = await House.exists({ 'members.user': user._id });
+		if (!stillMember) {
+			return res.status(401).json({
+				code: 'MEMBERSHIP_REVOKED',
+				error: {
+					en: 'You have been removed from the house',
+					vi: 'Bạn đã bị xóa khỏi nhà',
+				},
+			});
+		}
+
 		// Generate new tokens
 		const tokens = generateTokens(user);
 
@@ -246,7 +262,7 @@ router.put('/profile', auth, async (req, res) => {
 // Invite user to house
 router.post('/invite', auth, async (req, res) => {
 	try {
-		const { email, houseId } = req.body;
+		const { email, houseId, language: primaryLanguage } = req.body;
 		const userId = req.user._id;
 
 		const house = await House.findById(houseId);
@@ -295,14 +311,35 @@ router.post('/invite', auth, async (req, res) => {
 		await invitation.save();
 
 		const inviteLink = `${process.env.FRONTEND_URL}/join-house/${invitation.token}`;
-		const emailContent = getInviteEmailTemplate(house.name, inviteLink);
+		const inviterName = req.user.name || req.user.email;
+		const inviterEmail = req.user.email;
 
-		// Send invitation email asynchronously
+		const { subject, html, text } = getInviteEmailTemplate({
+			houseName: house.name,
+			inviterName,
+			inviteLink,
+			primaryLanguage: primaryLanguage === 'vi' ? 'vi' : 'en',
+		});
+
+		// Send invitation email asynchronously.
+		// Reply-To points at the inviter so replies reach a real human
+		// (better engagement signal than a noreply address).
+		// List-Unsubscribe is part of Gmail/Yahoo's 2024 bulk sender rules and
+		// is a positive deliverability signal even below their volume threshold.
 		transporter.sendMail({
 			from: `"William's Home" <${process.env.EMAIL_USER}>`,
 			to: email,
-			subject: `Invitation to join ${house.name} on William's Home | Lời mời tham gia ${house.name} trên William's Home`,
-			html: emailContent
+			replyTo: inviterEmail
+				? `"${inviterName}" <${inviterEmail}>`
+				: undefined,
+			subject,
+			text,
+			html,
+			headers: {
+				'List-Unsubscribe': `<mailto:${process.env.EMAIL_USER}?subject=unsubscribe>, <${process.env.FRONTEND_URL}/unsubscribe>`,
+				'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+				'X-Entity-Ref-ID': invitation._id.toString(),
+			},
 		}).catch(error => {
 			console.error('Failed to send invitation email:', error);
 		});
