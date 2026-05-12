@@ -1,5 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
+const multer = require('multer');
 const Expense = require('../models/Expense');
 const { EXPENSE_CATEGORIES } = require('../models/Expense');
 const House = require('../models/House');
@@ -7,10 +8,45 @@ const Settlement = require('../models/Settlement');
 const auth = require('../middleware/auth');
 const { calculateExpenses } = require('../utils/expenseCalculator');
 const { sendNotification } = require('../utils/notificationSender');
+const { uploadBuffer, destroyAsset, isConfigured: isCloudinaryConfigured } = require('../lib/cloudinary');
 
 const router = express.Router();
 
 const isValidCategory = (c) => EXPENSE_CATEGORIES.includes(c);
+
+// Per-expense receipt cap. Matches the FE limit; mirrored here so a
+// hand-rolled client can't stuff the document with thousands of references.
+const MAX_ATTACHMENTS = 8;
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+const ALLOWED_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif']);
+
+const upload = multer({
+	storage: multer.memoryStorage(),
+	limits: { fileSize: MAX_FILE_SIZE, files: MAX_ATTACHMENTS },
+	fileFilter: (_req, file, cb) => {
+		if (!ALLOWED_MIMES.has(file.mimetype)) {
+			return cb(new Error('UNSUPPORTED_TYPE'));
+		}
+		cb(null, true);
+	},
+});
+
+// multer errors arrive via `next(err)` — wrap each handler so we can map them
+// back to JSON without polluting the global error handler.
+const withMulter = (mw) => (req, res, next) =>
+	mw(req, res, (err) => {
+		if (!err) return next();
+		if (err.code === 'LIMIT_FILE_SIZE') {
+			return res.status(413).json({ error: 'ATTACHMENT_TOO_LARGE' });
+		}
+		if (err.code === 'LIMIT_UNEXPECTED_FILE' || err.code === 'LIMIT_FILE_COUNT') {
+			return res.status(400).json({ error: 'ATTACHMENT_LIMIT_REACHED' });
+		}
+		if (err.message === 'UNSUPPORTED_TYPE') {
+			return res.status(415).json({ error: 'ATTACHMENT_TYPE_UNSUPPORTED' });
+		}
+		return next(err);
+	});
 
 // Create new expense
 router.post('/', auth, async (req, res) => {
@@ -163,12 +199,115 @@ router.delete('/:id', auth, async (req, res) => {
 			return res.status(404).json({ error: 'Expense not found' });
 		}
 
+		// Best-effort cleanup of any uploaded receipts so we don't leak
+		// orphaned assets in Cloudinary. Failures here are logged but don't
+		// block the document removal.
+		if (Array.isArray(expense.attachments) && expense.attachments.length) {
+			await Promise.all(
+				expense.attachments.map((a) => destroyAsset(a.publicId))
+			);
+		}
 
 		await expense.deleteOne();
 
 		res.json({ message: 'Expense deleted successfully' });
 	} catch (error) {
 		res.status(500).json({ error: 'Failed to delete expense' });
+	}
+});
+
+// Upload one or more receipt images to an existing expense. Creator-only.
+//
+//   POST /api/expenses/:id/attachments    (multipart, field name "files")
+router.post(
+	'/:id/attachments',
+	auth,
+	withMulter(upload.array('files', MAX_ATTACHMENTS)),
+	async (req, res) => {
+		try {
+			if (!isCloudinaryConfigured()) {
+				return res.status(503).json({ error: 'ATTACHMENTS_UNAVAILABLE' });
+			}
+
+			const files = req.files || [];
+			if (!files.length) {
+				return res.status(400).json({ error: 'NO_FILES' });
+			}
+
+			const expense = await Expense.findById(req.params.id);
+			if (!expense) {
+				return res.status(404).json({ error: 'Expense not found' });
+			}
+
+			// Any member of the expense's house can attach a receipt — it's a
+			// shared household record, not a personal one, and the roommate
+			// often has the paper receipt for the other person's spend.
+			const isMember = await House.exists({
+				_id: expense.house,
+				'members.user': req.user._id,
+			});
+			if (!isMember) {
+				return res.status(403).json({ error: 'Not a member of this house' });
+			}
+
+			const remaining = MAX_ATTACHMENTS - (expense.attachments?.length || 0);
+			if (files.length > remaining) {
+				return res.status(400).json({ error: 'ATTACHMENT_LIMIT_REACHED' });
+			}
+
+			const folder = `house_${expense.house}/expense_${expense._id}`;
+			const uploaded = await Promise.all(
+				files.map((f) => uploadBuffer(f.buffer, { folder, mimeType: f.mimetype }))
+			);
+
+			expense.attachments.push(...uploaded);
+			await expense.save();
+
+			res.status(201).json({ attachments: expense.attachments });
+		} catch (error) {
+			console.error('Attachment upload error:', error);
+			res.status(500).json({ error: 'Failed to upload attachments' });
+		}
+	}
+);
+
+// Detach one receipt by its Cloudinary publicId. Creator-only.
+//
+//   DELETE /api/expenses/:id/attachments/:publicId
+//
+// publicId is URL-encoded by the client because it contains slashes.
+router.delete('/:id/attachments/:publicId', auth, async (req, res) => {
+	try {
+		const expense = await Expense.findById(req.params.id);
+		if (!expense) {
+			return res.status(404).json({ error: 'Expense not found' });
+		}
+
+		// Mirrors the upload rule: any house member can detach a receipt.
+		const isMember = await House.exists({
+			_id: expense.house,
+			'members.user': req.user._id,
+		});
+		if (!isMember) {
+			return res.status(403).json({ error: 'Not a member of this house' });
+		}
+
+		const publicId = decodeURIComponent(req.params.publicId);
+		const exists = expense.attachments?.some((a) => a.publicId === publicId);
+		if (!exists) {
+			return res.status(404).json({ error: 'Attachment not found' });
+		}
+
+		await destroyAsset(publicId);
+		expense.attachments = expense.attachments.filter(
+			(a) => a.publicId !== publicId
+		);
+		await expense.save();
+
+		res.json({ attachments: expense.attachments });
+	} catch (error) {
+		console.error('Attachment delete error:', error);
+		res.status(500).json({ error: 'Failed to delete attachment' });
 	}
 });
 

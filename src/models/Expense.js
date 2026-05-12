@@ -37,6 +37,20 @@ const expenseSchema = new mongoose.Schema({
 		default: 'OTHER',
 		index: true,
 	},
+	// Receipt images stored on Cloudinary. Only metadata lives here — the
+	// binary stays at `url`. `publicId` is required for deletes.
+	attachments: {
+		type: [{
+			url: { type: String, required: true },
+			publicId: { type: String, required: true },
+			mimeType: String,
+			width: Number,
+			height: Number,
+			bytes: Number,
+			uploadedAt: { type: Date, default: Date.now },
+		}],
+		default: [],
+	},
 	isSettled: {
 		type: Boolean,
 		default: false
