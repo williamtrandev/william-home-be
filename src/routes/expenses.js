@@ -719,7 +719,7 @@ router.get('/analytics/me', auth, async (req, res) => {
 
 		const houseObjectId = new mongoose.Types.ObjectId(houseId);
 		const userObjectId = new mongoose.Types.ObjectId(req.user._id);
-		const baseMatch = { house: houseObjectId };
+		const baseMatch = { house: houseObjectId, isSettled: false };
 		if (dateFilter) baseMatch.createdAt = dateFilter;
 
 		// Run three aggregations in parallel: my totals, house totals,
