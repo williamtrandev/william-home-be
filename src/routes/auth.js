@@ -154,6 +154,7 @@ router.post('/login/google', async (req, res) => {
 				email: user.email,
 				name: user.name,
 				picture: user.picture,
+				bankAccount: user.bankAccount,
 				houses: userHouses,
 				currentHouseRole: member.role
 			}
@@ -222,7 +223,8 @@ router.get('/me', auth, async (req, res) => {
 			id: user._id,
 			name: user.name,
 			email: user.email,
-			picture: user.picture
+			picture: user.picture,
+			bankAccount: user.bankAccount
 		});
 	} catch (error) {
 		console.log(error);
@@ -238,12 +240,22 @@ router.get('/me', auth, async (req, res) => {
 // Update user profile
 router.put('/profile', auth, async (req, res) => {
 	try {
-		const { name, picture } = req.body;
+		const { name, picture, bankAccount } = req.body;
 		const user = req.user;
 
 		// Update only provided fields
 		if (name) user.name = name;
 		if (picture) user.picture = picture;
+		if (bankAccount !== undefined) {
+			if (!bankAccount || typeof bankAccount !== 'object' || Array.isArray(bankAccount)) {
+				return res.status(400).json({ error: 'Invalid bank account' });
+			}
+
+			if (bankAccount.bankCode !== undefined) user.set('bankAccount.bankCode', bankAccount.bankCode);
+			if (bankAccount.bankName !== undefined) user.set('bankAccount.bankName', bankAccount.bankName);
+			if (bankAccount.accountNo !== undefined) user.set('bankAccount.accountNo', bankAccount.accountNo);
+			if (bankAccount.accountName !== undefined) user.set('bankAccount.accountName', bankAccount.accountName);
+		}
 
 		await user.save();
 
@@ -251,7 +263,8 @@ router.put('/profile', auth, async (req, res) => {
 			id: user._id,
 			name: user.name,
 			email: user.email,
-			picture: user.picture
+			picture: user.picture,
+			bankAccount: user.bankAccount
 		});
 	} catch (error) {
 		console.error('Profile update error:', error);

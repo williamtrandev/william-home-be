@@ -16,6 +16,12 @@ const userSchema = new mongoose.Schema({
 		required: true
 	},
 	picture: String,
+	bankAccount: {
+		bankCode: String,
+		bankName: String,
+		accountNo: String,
+		accountName: String
+	},
 	houses: [{
 		type: mongoose.Schema.Types.ObjectId,
 		ref: 'House'

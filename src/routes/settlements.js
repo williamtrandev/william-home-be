@@ -42,8 +42,8 @@ router.get('/', auth, async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
 	try {
 		const settlement = await Settlement.findById(req.params.id)
-			.populate('transactions.from', 'name email picture')
-			.populate('transactions.to', 'name email picture')
+			.populate('transactions.from', 'name email picture bankAccount')
+			.populate('transactions.to', 'name email picture bankAccount')
 			.populate('createdBy', 'name email picture');
 
 		if (!settlement) {
