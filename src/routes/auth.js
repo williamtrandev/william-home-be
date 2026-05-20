@@ -215,17 +215,18 @@ router.post('/refresh-token', async (req, res) => {
 	}
 });
 
+const serializeUser = (user) => ({
+	id: user._id,
+	name: user.name,
+	email: user.email,
+	picture: user.picture,
+	bankAccount: user.bankAccount,
+});
+
 // Get current user
 router.get('/me', auth, async (req, res) => {
 	try {
-		const user = req.user;
-		res.json({
-			id: user._id,
-			name: user.name,
-			email: user.email,
-			picture: user.picture,
-			bankAccount: user.bankAccount
-		});
+		res.json(serializeUser(req.user));
 	} catch (error) {
 		console.log(error);
 		res.status(401).json({
@@ -234,6 +235,16 @@ router.get('/me', auth, async (req, res) => {
 				vi: 'Token xác thực không hợp lệ'
 			}
 		});
+	}
+});
+
+// Alias for clients that expect GET /profile (same payload as /me)
+router.get('/profile', auth, async (req, res) => {
+	try {
+		res.json(serializeUser(req.user));
+	} catch (error) {
+		console.error('Profile fetch error:', error);
+		res.status(500).json({ error: 'Failed to fetch profile' });
 	}
 });
 
@@ -259,13 +270,7 @@ router.put('/profile', auth, async (req, res) => {
 
 		await user.save();
 
-		res.json({
-			id: user._id,
-			name: user.name,
-			email: user.email,
-			picture: user.picture,
-			bankAccount: user.bankAccount
-		});
+		res.json(serializeUser(user));
 	} catch (error) {
 		console.error('Profile update error:', error);
 		res.status(500).json({ error: 'Failed to update profile' });
