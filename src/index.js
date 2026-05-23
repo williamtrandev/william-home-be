@@ -15,6 +15,7 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/william-h
 	.catch(err => console.error('MongoDB connection error:', err));
 
 // Routes
+app.use('/health', require('./routes/health'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/houses', require('./routes/houses'));
 app.use('/api/expenses', require('./routes/expenses'));
