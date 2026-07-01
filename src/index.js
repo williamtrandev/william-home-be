@@ -21,6 +21,7 @@ app.use('/api/houses', require('./routes/houses'));
 app.use('/api/expenses', require('./routes/expenses'));
 app.use('/api/settlements', require('./routes/settlements'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/webhook', require('./routes/webhook'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
