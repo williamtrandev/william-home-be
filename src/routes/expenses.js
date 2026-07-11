@@ -490,7 +490,7 @@ router.post('/calculate/:houseId', auth, async (req, res) => {
 
 		// Get house and check if user is a member
 		const house = await House.findById(houseId)
-			.populate('members.user', 'name email picture');
+			.populate('members.user', 'name email picture bankAccount');
 
 		if (!house) {
 			return res.status(404).json({
